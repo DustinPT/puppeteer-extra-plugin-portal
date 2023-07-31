@@ -135,10 +135,18 @@ export class PortalServer {
     if (this.targetIdPageHandlerMap.size === 0 && !this.isMiddleware) {
       await this.openServer();
     }
+    let serverBaseUrl
+    if(this.listenOpts){
+      serverBaseUrl=`http://localhost:${this.listenOpts.port}`
+    }else{
+      serverBaseUrl='https://localhost'
+    }
+
     const pageHandler = new PageHandler({
       page: params.page,
       targetId: params.targetId,
       debug: this.debug,
+      serverBaseUrl: serverBaseUrl
     });
     this.targetIdPageHandlerMap.set(params.targetId, pageHandler);
     const fullUrl = this.webPortalBaseUrl;

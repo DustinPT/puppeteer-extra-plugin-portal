@@ -39,6 +39,14 @@ export default class Runner {
 
   private started = false;
 
+  private videoDecoder:VideoDecoder;
+
+  private pendingFrames:any;
+
+  private underflow:boolean;
+
+  private baseTime:number;
+
   static getModifiersForEvent(event: any) {
     return (
       // eslint-disable-next-line no-bitwise
@@ -275,7 +283,7 @@ export default class Runner {
       );
     },
     500,
-    { isImmediate: true }
+    { isImmediate: false }
   );
 
   close = once((...args: any[]) => {
@@ -321,9 +329,16 @@ export default class Runner {
 
     this.wsClient.addEventListener('message', async (evt) => {
       const text = await evt.data.text();
-      const { data } = JSON.parse(text) as CommandResponse;
-      console.log('Websocket message received');
-      this.onScreencastFrame(data);
+      // const { data } = JSON.parse(text) as CommandResponse;
+      // console.log('Websocket message received');
+      // this.onScreencastFrame(data);
+      const { command, data } = JSON.parse(text);
+      console.log('Websocket message received', command)
+      if(command==='configVideoDecoder'){
+        this.onConfigVideoDecoder({command,data})
+      }else if(command==='videoChunk'){
+        this.onVideoChunk({command,data})
+      }
     });
 
     this.wsClient.addEventListener('open', () => {
@@ -340,4 +355,87 @@ export default class Runner {
       this.close();
     });
   };
+
+  onConfigVideoDecoder(msg:any) {
+    if(!this.videoDecoder){
+      const init = {
+        output: this.handleFrame.bind(this),
+        error: (e:any) => {
+          console.log(e.message);
+        },
+      };
+
+      const config = {
+        codec: msg.data.codec,
+        codedWidth: msg.data.codedWidth,
+        codedHeight: msg.data.codedHeight,
+      };
+
+      this.pendingFrames = [];
+      this.underflow = true;
+      this.baseTime = 0;
+
+      // eslint-disable-next-line no-undef
+      this.videoDecoder = new VideoDecoder(init);
+      this.videoDecoder.configure(config);
+    }else{
+      const config = {
+        codec: msg.data.codec,
+        codedWidth: msg.data.codedWidth,
+        codedHeight: msg.data.codedHeight,
+      };
+      this.videoDecoder.configure(config);
+    }
+  }
+
+  onVideoChunk(msg:any) {
+    // eslint-disable-next-line no-undef
+    const chunk = new EncodedVideoChunk({
+      timestamp: msg.data.timestamp,
+      type: msg.data.type,
+      data: this.decodeBase64(msg.data.chunkData),
+    });
+    this.videoDecoder.decode(chunk);
+  }
+
+  decodeBase64(b64Data:any) {
+    const byteCharacters = atob(b64Data);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    return new Uint8Array(byteNumbers);
+  }
+
+  handleFrame(frame:any) {
+    console.log('handleFrame:',frame)
+    this.pendingFrames.push(frame);
+    if (this.underflow) setTimeout(this.renderFrame.bind(this), 0);
+  }
+
+  calculateTimeUntilNextFrame(timestamp:any) {
+    if (this.baseTime === 0) this.baseTime = performance.now();
+    let mediaTime = performance.now() - this.baseTime;
+    return Math.max(0, timestamp / 1000 - mediaTime);
+  }
+
+  async renderFrame() {
+    this.underflow = this.pendingFrames.length === 0;
+    if (this.underflow) return;
+
+    const frame = this.pendingFrames.shift();
+
+    // Based on the frame's timestamp calculate how much of real time waiting
+    // is needed before showing the next frame.
+    const timeUntilNextFrame = this.calculateTimeUntilNextFrame(frame.timestamp);
+    console.log('timeUntilNextFrame:',timeUntilNextFrame)
+    await new Promise((r) => {
+      setTimeout(r, timeUntilNextFrame);
+    });
+    this.ctx.drawImage(frame, 0, 0);
+    frame.close();
+
+    // Immediately schedule rendering of the next frame
+    setTimeout(this.renderFrame.bind(this), 0);
+  }
 }

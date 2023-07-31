@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+<canvas id="canvas" width="1400" height="600"></canvas>
+<script>
+    const canvas = document.getElementById('canvas')
+    let encoder
+    let frameCounter = 0;
+    let startFrameTime
+    let frameWidth,frameHeight
+    const img=new Image()
+
+    function createVideoEncoder(width, height) {
+        const init = {
+            output: handleChunk,
+            error: (e) => {
+                console.log(e.message);
+            },
+        };
+        frameWidth=width
+        frameHeight=height
+        const config = {
+            codec: "vp8",
+            width,
+            height,
+            bitrate: 200_000, // 200 Kbps
+            framerate: 5,
+        };
+        console.log('VideoEncoder config:', config)
+        encoder = new VideoEncoder(init);
+        encoder.configure(config);
+        frameCounter = 0
+    }
+
+    function configVideoEncoder(width, height) {
+        if(!encoder||encoder.state==='closed'){
+            return createVideoEncoder(width,height)
+        }
+        frameWidth=width
+        frameHeight=height
+        const config = {
+            codec: "vp8",
+            width,
+            height,
+            bitrate: 200_000, // 200 Kbps
+            framerate: 15,
+        };
+        console.log('VideoEncoder config:', config)
+        encoder.configure(config);
+    }
+
+    function b64toBlob(b64Data, contentType = '', sliceSize = 512) {
+        const byteCharacters = atob(b64Data);
+        const byteArrays = [];
+
+        for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+            const slice = byteCharacters.slice(offset, offset + sliceSize);
+
+            const byteNumbers = new Array(slice.length);
+            for (let i = 0; i < slice.length; i++) {
+                byteNumbers[i] = slice.charCodeAt(i);
+            }
+
+            const byteArray = new Uint8Array(byteNumbers);
+            byteArrays.push(byteArray);
+        }
+        const blob = new Blob(byteArrays, {type: contentType});
+        return blob;
+    }
+
+    function base64(bytes){
+        return btoa(String.fromCharCode.apply(null, bytes))
+    }
+
+    async function onGetImageData(imageData,metadata) {
+        console.log('onGetImageData', metadata)
+        if(!encoder||encoder.state==='closed'){
+            createVideoEncoder(frameWidth,frameHeight)
+        }
+        const blob = b64toBlob(imageData, 'image/jpeg');
+        const timestamp = Math.round(metadata.timestamp*1000000)
+        if (frameCounter === 0) {
+            startFrameTime = timestamp
+        }
+        const img=await createImageBitmap(blob)
+        const frame = new VideoFrame(img, {timestamp});
+        if (encoder.encodeQueueSize > 20) {
+            // Too many frames in flight, encoder is overwhelmed
+            // let's drop this frame.
+            frame.close();
+            return false
+        } else {
+            const keyFrame = frameCounter % 150 === 0;
+            encoder.encode(frame, {keyFrame});
+            frame.close();
+            frameCounter++;
+            return true
+        }
+    }
+
+
+
+    function handleChunk(chunk, metadata) {
+        if (metadata.decoderConfig) {
+            // Decoder needs to be configured (or reconfigured) with new parameters
+            // when metadata has a new decoderConfig.
+            // Usually it happens in the beginning or when the encoder has a new
+            // codec specific binary configuration. (VideoDecoderConfig.description).
+            // fetch("/upload_extra_data", {
+            //     method: "POST",
+            //     headers: { "Content-Type": "application/octet-stream" },
+            //     body: metadata.decoderConfig.description,
+            // });
+            sendMessageToController({
+                type:'configVideoDecoder',
+                data:{
+                    codec:metadata.decoderConfig.codec,
+                    description:base64(metadata.decoderConfig.description),
+                    codedWidth:metadata.decoderConfig.codedWidth,
+                    codedHeight:metadata.decoderConfig.codedHeight
+                }
+            })
+        }
+
+        // actual bytes of encoded data
+        const chunkData = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(chunkData);
+        //
+        // fetch(`/upload_chunk?timestamp=${chunk.timestamp}&type=${chunk.type}`, {
+        //     method: "POST",
+        //     headers: { "Content-Type": "application/octet-stream" },
+        //     body: chunkData,
+        // });
+        sendMessageToController({
+            type:'videoChunk',
+            data:{
+                timestamp:chunk.timestamp,
+                type:chunk.type,
+                chunkData:base64(chunkData),
+            }
+        })
+    }
+</script>
+</body>
+</html>

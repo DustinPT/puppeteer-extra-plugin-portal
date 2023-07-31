@@ -1,5 +1,6 @@
 const path = require('path');
 const HtmlWebPackPlugin = require('html-webpack-plugin');
+const CopyPlugin = require("copy-webpack-plugin");
 
 const srcDir = path.resolve(__dirname, 'src');
 const outputDir = path.resolve(__dirname, '..', 'dist', 'frontend');
@@ -38,6 +39,11 @@ const main = {
       template: path.join(srcDir, 'index.html'),
       hash: true,
       publicPath: './',
+    }),
+    new CopyPlugin({
+      patterns: [
+        "src/video-encoder.html"
+      ],
     }),
   ],
 };

@@ -10,6 +10,7 @@ export interface PageHandlerProps {
   page: Page;
   targetId: string;
   debug: debug.Debugger;
+  serverBaseUrl: string;
 }
 
 export enum SpecialCommands {
@@ -27,35 +28,35 @@ export enum MiscCommands {
 
 export type MiscCommandRequest =
   | {
-      command: MiscCommands.RELOAD;
-      params: Protocol.Page.ReloadRequest;
-    }
+  command: MiscCommands.RELOAD;
+  params: Protocol.Page.ReloadRequest;
+}
   | {
-      command: MiscCommands.NAVIGATE_TO_HISTORY_ENTRY;
-      params: Protocol.Page.NavigateToHistoryEntryRequest;
-    }
+  command: MiscCommands.NAVIGATE_TO_HISTORY_ENTRY;
+  params: Protocol.Page.NavigateToHistoryEntryRequest;
+}
   | {
-      command: MiscCommands.EMULATE_TOUCH_FROM_MOUSE;
-      params: Protocol.Input.EmulateTouchFromMouseEventRequest;
-    }
+  command: MiscCommands.EMULATE_TOUCH_FROM_MOUSE;
+  params: Protocol.Input.EmulateTouchFromMouseEventRequest;
+}
   | {
-      command: MiscCommands.DISPACTCH_KEY;
-      params: Protocol.Input.DispatchKeyEventRequest;
-    }
+  command: MiscCommands.DISPACTCH_KEY;
+  params: Protocol.Input.DispatchKeyEventRequest;
+}
   | {
-      command: MiscCommands.SCREENCAST_ACK;
-      params: Protocol.Page.ScreencastFrameAckRequest;
-    };
+  command: MiscCommands.SCREENCAST_ACK;
+  params: Protocol.Page.ScreencastFrameAckRequest;
+};
 
 export type CommandRequest =
   | {
-      command: SpecialCommands.START_SCREENCAST;
-      params: Protocol.Page.StartScreencastRequest;
-    }
+  command: SpecialCommands.START_SCREENCAST;
+  params: Protocol.Page.StartScreencastRequest;
+}
   | {
-      command: SpecialCommands.SET_VIEWPORT;
-      params: Protocol.Page.SetDeviceMetricsOverrideRequest;
-    }
+  command: SpecialCommands.SET_VIEWPORT;
+  params: Protocol.Page.SetDeviceMetricsOverrideRequest;
+}
   | MiscCommandRequest;
 
 export type CommandResponse = {
@@ -72,9 +73,18 @@ export class PageHandler {
 
   private debug: debug.Debugger;
 
+  private videoEncoderPage?: Page;
+
+  private serverBaseUrl: string;
+
+  private videoEncoderWidth: number = 0;
+
+  private videoEncoderHeight: number = 0;
+
   constructor(props: PageHandlerProps) {
     this.debug = props.debug.extend(props.targetId);
     this.page = props.page;
+    this.serverBaseUrl = props.serverBaseUrl;
     if (props.ws) this.setWs(props.ws);
     this.debug('Created pageHandler');
   }
@@ -94,9 +104,26 @@ export class PageHandler {
 
   public setWs(ws: WebSocket): void {
     this.debug('Setting websocket');
+    if (this.ws) this.ws.close();
+    this.closeVideoEncoderPage();
     this.ws = ws;
     ws.on('message', this.messageHandler.bind(this));
     ws.on('error', this.onError.bind(this));
+    ws.on('close', () => {
+      if (this.cdpSession) {
+        this.cdpSession.send('Page.stopScreencast');
+      }
+      this.closeVideoEncoderPage();
+    });
+  }
+
+  closeVideoEncoderPage() {
+    if (this.videoEncoderPage) {
+      this.videoEncoderPage.close();
+      this.videoEncoderPage = undefined;
+      this.videoEncoderWidth = 0;
+      this.videoEncoderHeight = 0;
+    }
   }
 
   public async close(): Promise<void> {
@@ -106,6 +133,11 @@ export class PageHandler {
       if (this.cdpSession) return this.cdpSession.detach();
       return undefined;
     });
+    if (this.videoEncoderPage) {
+      await this.safeFn(async () => {
+        this.closeVideoEncoderPage();
+      });
+    }
   }
 
   private async getCdpSession(): Promise<CDPSession> {
@@ -137,19 +169,97 @@ export class PageHandler {
 
   private async setViewPort(data: Protocol.Page.SetDeviceMetricsOverrideRequest) {
     await this.safeFn(() => this.page.setViewport(data));
+    await this.safeFn(async () => {
+      if (this.videoEncoderPage) {
+        await this.configVideoEncoder(data.width, data.height);
+      }
+    });
+  }
+
+  private async createVideoEncoder() {
+    if (!this.videoEncoderPage) {
+      console.log('creating videoEncoderPage');
+      this.videoEncoderPage = await this.page.browserContext().newPage();
+      await this.videoEncoderPage.exposeFunction('sendMessageToController', (msg: any) => {
+        console.log('receive msg from video encoder');
+        if (!this.ws) {
+          console.log('discard msg from video encoder: websocket not exist');
+          return;
+        }
+        if (msg.type === 'videoChunk') {
+          console.log('videoChunk delay: ', Date.now() - msg.data.timestamp / 1000);
+        }
+        this.ws.send(Buffer.from(JSON.stringify({
+          command: msg.type,
+          data: msg.data
+        })));
+      });
+      await this.videoEncoderPage.goto(this.serverBaseUrl + '/video-encoder.html');
+      console.log('videoEncoderPage created');
+    }
+  }
+
+  private async configVideoEncoder(width: number, height: number) {
+    if (!this.videoEncoderPage) {
+      throw new Error('configVideoEncoder failed: videoEncoderPage is null');
+    }
+    if (this.videoEncoderWidth !== width || this.videoEncoderHeight !== height) {
+      console.log('start to configVideoEncoder');
+      await this.videoEncoderPage.evaluate((viewportWidth, viewportHeight) => {
+        // @ts-ignore
+        configVideoEncoder(viewportWidth, viewportHeight);
+      }, width, height);
+      this.videoEncoderWidth = width;
+      this.videoEncoderHeight = height;
+      console.log('configVideoEncoder ok');
+    }
   }
 
   private async startScreencast(params: Protocol.Page.StartScreencastRequest): Promise<void> {
     const client = await this.getCdpSession();
+    await this.createVideoEncoder();
+    const viewport = this.page.viewport();
+    if (!viewport) {
+      throw new Error('startScreencast failed: viewport is null');
+    }
+    await this.configVideoEncoder(viewport.width, viewport.height);
     await this.safeFn(() => client.send('Page.startScreencast', params));
     client.on('Page.screencastFrame', this.onScreencastFrame.bind(this));
   }
 
   private onScreencastFrame(data: Protocol.Page.ScreencastFrameEvent): void {
     this.debug('Got screencast frame: %j', { sessionId: data.sessionId, metadata: data.metadata });
+      // @ts-ignore
+    console.log('screencast frame delay: ', Date.now() - data.metadata.timestamp * 1000);
     const commandResponse: CommandResponse = { command: 'Page.screencastFrame', data };
-    if (!this.ws) throw new Error('Websocket not set for page');
-    this.ws.send(Buffer.from(JSON.stringify(commandResponse)));
+    // if (!this.ws) throw new Error('Websocket not set for page');
+    // this.ws.send(Buffer.from(JSON.stringify(commandResponse)));
+    if (this.cdpSession) {
+      console.log('Page.screencastFrameAck sent');
+      this.cdpSession.send('Page.screencastFrameAck', { sessionId: data.sessionId });
+    } else {
+      console.log('Page.screencastFrameAck not send');
+    }
+    if (this.videoEncoderPage) {
+      const startSending=Date.now()
+      this.videoEncoderPage.evaluate(async (imageData, metadata) => {
+        const start=Date.now()
+        // @ts-ignore
+        const success=await onGetImageData(imageData, metadata);
+        return {
+          success,
+          time:Date.now()-start
+        }
+      }, data.data, data.metadata).then(result => {
+        if (!result.success) {
+          console.log('discard screencast frame: video encoder is overwhelmed');
+        }else{
+          console.log('onGetImageData delay: total=%d, inPage=%d', Date.now() - startSending, result.time);
+        }
+      });
+    } else {
+      console.log('discard screencast frame: videoEncoderPage not exist');
+    }
   }
 
   private async sendMiscCommand(commandRequest: MiscCommandRequest): Promise<void> {
@@ -159,4 +269,5 @@ export class PageHandler {
     }
     return undefined;
   }
+
 }
