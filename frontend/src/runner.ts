@@ -443,13 +443,14 @@ export default class Runner {
       Date.now()-frameState.decoded, Date.now()-frame.timestamp/1000)
     this.frameStates.delete(frame.timestamp)
 
+    // 实时视频没有必要等待
     // Based on the frame's timestamp calculate how much of real time waiting
     // is needed before showing the next frame.
-    const timeUntilNextFrame = this.calculateTimeUntilNextFrame(frame.timestamp);
-    console.log('timeUntilNextFrame:',timeUntilNextFrame)
-    await new Promise((r) => {
-      setTimeout(r, timeUntilNextFrame);
-    });
+    // const timeUntilNextFrame = this.calculateTimeUntilNextFrame(frame.timestamp);
+    // console.log('timeUntilNextFrame:',timeUntilNextFrame)
+    // await new Promise((r) => {
+    //   setTimeout(r, timeUntilNextFrame);
+    // });
     this.ctx.drawImage(frame, 0, 0);
     frame.close();
 
