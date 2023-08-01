@@ -178,16 +178,16 @@ export class PageHandler {
 
   private async createVideoEncoder() {
     if (!this.videoEncoderPage) {
-      console.log('creating videoEncoderPage');
+      this.debug('creating videoEncoderPage');
       this.videoEncoderPage = await this.page.browserContext().newPage();
       await this.videoEncoderPage.exposeFunction('sendMessageToController', (msg: any) => {
-        console.log('receive msg from video encoder');
+        this.debug('receive msg from video encoder: type=%s', msg.type);
         if (!this.ws) {
-          console.log('discard msg from video encoder: websocket not exist');
+          this.debug('discard msg from video encoder: websocket not exist');
           return;
         }
         if (msg.type === 'videoChunk') {
-          console.log('videoChunk delay: ', Date.now() - msg.data.timestamp / 1000);
+          this.debug('videoChunk delay: ', Date.now() - msg.data.timestamp / 1000);
         }
         this.ws.send(Buffer.from(JSON.stringify({
           command: msg.type,
@@ -195,7 +195,7 @@ export class PageHandler {
         })));
       });
       await this.videoEncoderPage.goto(this.serverBaseUrl + '/video-encoder.html');
-      console.log('videoEncoderPage created');
+      this.debug('videoEncoderPage created');
     }
   }
 
@@ -204,14 +204,14 @@ export class PageHandler {
       throw new Error('configVideoEncoder failed: videoEncoderPage is null');
     }
     if (this.videoEncoderWidth !== width || this.videoEncoderHeight !== height) {
-      console.log('start to configVideoEncoder');
+      this.debug('start to configVideoEncoder');
       await this.videoEncoderPage.evaluate((viewportWidth, viewportHeight) => {
         // @ts-ignore
         configVideoEncoder(viewportWidth, viewportHeight);
       }, width, height);
       this.videoEncoderWidth = width;
       this.videoEncoderHeight = height;
-      console.log('configVideoEncoder ok');
+      this.debug('configVideoEncoder ok');
     }
   }
 
@@ -228,37 +228,32 @@ export class PageHandler {
   }
 
   private onScreencastFrame(data: Protocol.Page.ScreencastFrameEvent): void {
-    this.debug('Got screencast frame: %j', { sessionId: data.sessionId, metadata: data.metadata });
+    this.debug('Got screencast frame: %j, delay=%d',
       // @ts-ignore
-    console.log('screencast frame delay: ', Date.now() - data.metadata.timestamp * 1000);
+      { sessionId: data.sessionId, metadata: data.metadata },Date.now() - data.metadata.timestamp * 1000);
     const commandResponse: CommandResponse = { command: 'Page.screencastFrame', data };
     // if (!this.ws) throw new Error('Websocket not set for page');
     // this.ws.send(Buffer.from(JSON.stringify(commandResponse)));
     if (this.cdpSession) {
-      console.log('Page.screencastFrameAck sent');
+      this.debug('Page.screencastFrameAck sent');
       this.cdpSession.send('Page.screencastFrameAck', { sessionId: data.sessionId });
     } else {
-      console.log('Page.screencastFrameAck not send');
+      this.debug('Page.screencastFrameAck not send');
     }
     if (this.videoEncoderPage) {
       const startSending=Date.now()
       this.videoEncoderPage.evaluate(async (imageData, metadata) => {
         const start=Date.now()
         // @ts-ignore
-        const success=await onGetImageData(imageData, metadata);
+        setTimeout(()=>onGetImageData(imageData, metadata),0)
         return {
-          success,
           time:Date.now()-start
         }
       }, data.data, data.metadata).then(result => {
-        if (!result.success) {
-          console.log('discard screencast frame: video encoder is overwhelmed');
-        }else{
-          console.log('onGetImageData delay: total=%d, inPage=%d', Date.now() - startSending, result.time);
-        }
+        this.debug('onGetImageData delay: total=%d, inPage=%d', Date.now() - startSending, result.time);
       });
     } else {
-      console.log('discard screencast frame: videoEncoderPage not exist');
+      this.debug('discard screencast frame: videoEncoderPage not exist');
     }
   }
 

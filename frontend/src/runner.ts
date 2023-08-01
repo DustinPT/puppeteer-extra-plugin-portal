@@ -47,6 +47,10 @@ export default class Runner {
 
   private baseTime:number;
 
+  private baseTimestamp:number;
+
+  private frameStates:Map<number,any>=new Map();
+
   static getModifiersForEvent(event: any) {
     return (
       // eslint-disable-next-line no-bitwise
@@ -357,6 +361,7 @@ export default class Runner {
   };
 
   onConfigVideoDecoder(msg:any) {
+    console.info('onConfigVideoDecoder', msg)
     if(!this.videoDecoder){
       const init = {
         output: this.handleFrame.bind(this),
@@ -389,6 +394,7 @@ export default class Runner {
   }
 
   onVideoChunk(msg:any) {
+    this.frameStates.set(msg.data.timestamp,{received:Date.now()})
     // eslint-disable-next-line no-undef
     const chunk = new EncodedVideoChunk({
       timestamp: msg.data.timestamp,
@@ -408,15 +414,21 @@ export default class Runner {
   }
 
   handleFrame(frame:any) {
-    console.log('handleFrame:',frame)
+    const frameState=this.frameStates.get(frame.timestamp)
+    frameState.decoded=Date.now()
+
     this.pendingFrames.push(frame);
     if (this.underflow) setTimeout(this.renderFrame.bind(this), 0);
   }
 
   calculateTimeUntilNextFrame(timestamp:any) {
-    if (this.baseTime === 0) this.baseTime = performance.now();
+    if (this.baseTime === 0) {
+      this.baseTime = performance.now();
+      this.baseTimestamp=timestamp
+      return 0
+    }
     let mediaTime = performance.now() - this.baseTime;
-    return Math.max(0, timestamp / 1000 - mediaTime);
+    return Math.max(0, (timestamp-this.baseTimestamp) / 1000 - mediaTime);
   }
 
   async renderFrame() {
@@ -424,6 +436,12 @@ export default class Runner {
     if (this.underflow) return;
 
     const frame = this.pendingFrames.shift();
+
+    const frameState=this.frameStates.get(frame.timestamp)
+    console.debug('renderFrame delay: received_delay=%d, decoded_delay=%d, render_delay=%d, final_delay=%d',
+      frameState.received-frame.timestamp/1000,frameState.decoded-frameState.received,
+      Date.now()-frameState.decoded, Date.now()-frame.timestamp/1000)
+    this.frameStates.delete(frame.timestamp)
 
     // Based on the frame's timestamp calculate how much of real time waiting
     // is needed before showing the next frame.

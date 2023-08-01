@@ -10,15 +10,15 @@
     const canvas = document.getElementById('canvas')
     let encoder
     let frameCounter = 0;
-    let startFrameTime
     let frameWidth,frameHeight
-    const img=new Image()
+    let pendingFrames=[];
+    let underflow=true;
 
     function createVideoEncoder(width, height) {
         const init = {
             output: handleChunk,
             error: (e) => {
-                console.log(e.message);
+                console.error(e.message);
             },
         };
         frameWidth=width
@@ -27,10 +27,10 @@
             codec: "vp8",
             width,
             height,
-            bitrate: 200_000, // 200 Kbps
-            framerate: 5,
+            bitrate: 1000_000, // 200 Kbps
+            framerate: 15,
         };
-        console.log('VideoEncoder config:', config)
+        console.info('VideoEncoder config:', config)
         encoder = new VideoEncoder(init);
         encoder.configure(config);
         frameCounter = 0
@@ -49,7 +49,7 @@
             bitrate: 200_000, // 200 Kbps
             framerate: 15,
         };
-        console.log('VideoEncoder config:', config)
+        console.info('VideoEncoder config:', config)
         encoder.configure(config);
     }
 
@@ -77,32 +77,37 @@
     }
 
     async function onGetImageData(imageData,metadata) {
-        console.log('onGetImageData', metadata)
+        console.debug('onGetImageData', metadata)
+        pendingFrames.push({imageData,metadata});
+        if (underflow) setTimeout(processFrame, 0);
+    }
+
+    async function processFrame() {
+        underflow = pendingFrames.length === 0;
+        if (underflow) return;
+
+        const {imageData,metadata} = pendingFrames.shift();
+
         if(!encoder||encoder.state==='closed'){
             createVideoEncoder(frameWidth,frameHeight)
         }
-        const blob = b64toBlob(imageData, 'image/jpeg');
-        const timestamp = Math.round(metadata.timestamp*1000000)
-        if (frameCounter === 0) {
-            startFrameTime = timestamp
-        }
-        const img=await createImageBitmap(blob)
-        const frame = new VideoFrame(img, {timestamp});
-        if (encoder.encodeQueueSize > 20) {
+        if (encoder.encodeQueueSize > 2) {
             // Too many frames in flight, encoder is overwhelmed
             // let's drop this frame.
-            frame.close();
-            return false
-        } else {
+            console.warn("Drop frame %d due to encoder(encodeQueueSize=%d) is overwhelmed",
+              metadata.timestamp,encoder.encodeQueueSize)
+        }else{
+            const blob = b64toBlob(imageData, 'image/jpeg');
+            const timestamp = Math.round(metadata.timestamp*1000000)
+            const img=await createImageBitmap(blob)
+            const frame = new VideoFrame(img, {timestamp});
             const keyFrame = frameCounter % 150 === 0;
             encoder.encode(frame, {keyFrame});
             frame.close();
             frameCounter++;
-            return true
         }
+        setTimeout(processFrame, 0);
     }
-
-
 
     function handleChunk(chunk, metadata) {
         if (metadata.decoderConfig) {
