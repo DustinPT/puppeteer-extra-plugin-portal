@@ -415,8 +415,9 @@ export default class Runner {
 
   handleFrame(frame:any) {
     const frameState=this.frameStates.get(frame.timestamp)
-    frameState.decoded=Date.now()
-
+    if(frameState){
+      frameState.decoded=Date.now()
+    }
     this.pendingFrames.push(frame);
     if (this.underflow) setTimeout(this.renderFrame.bind(this), 0);
   }
@@ -438,10 +439,12 @@ export default class Runner {
     const frame = this.pendingFrames.shift();
 
     const frameState=this.frameStates.get(frame.timestamp)
-    console.debug('renderFrame delay: received_delay=%d, decoded_delay=%d, render_delay=%d, final_delay=%d',
-      frameState.received-frame.timestamp/1000,frameState.decoded-frameState.received,
-      Date.now()-frameState.decoded, Date.now()-frame.timestamp/1000)
-    this.frameStates.delete(frame.timestamp)
+    if(frameState){
+      console.debug('renderFrame delay: received_delay=%d, decoded_delay=%d, render_delay=%d, final_delay=%d',
+        frameState.received-frame.timestamp/1000,frameState.decoded-frameState.received,
+        Date.now()-frameState.decoded, Date.now()-frame.timestamp/1000)
+      this.frameStates.delete(frame.timestamp)
+    }
 
     // 实时视频没有必要等待
     // Based on the frame's timestamp calculate how much of real time waiting
