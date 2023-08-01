@@ -27,8 +27,9 @@
             codec: "vp8",
             width,
             height,
-            bitrate: 1000_000, // 200 Kbps
+            bitrate: 1_000_000, // 1 Mbps
             framerate: 15,
+            latencyMode: 'realtime'
         };
         console.info('VideoEncoder config:', config)
         encoder = new VideoEncoder(init);
@@ -46,8 +47,9 @@
             codec: "vp8",
             width,
             height,
-            bitrate: 200_000, // 200 Kbps
+            bitrate: 1_000_000, // 1 Mbps
             framerate: 15,
+            latencyMode: 'realtime'
         };
         console.info('VideoEncoder config:', config)
         encoder.configure(config);

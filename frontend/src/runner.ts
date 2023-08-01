@@ -41,15 +41,17 @@ export default class Runner {
 
   private videoDecoder:VideoDecoder;
 
-  private pendingFrames:any;
+  private pendingFrames:Array<any>=[];
 
-  private underflow:boolean;
+  private underflow:boolean=true;
 
-  private baseTime:number;
+  private baseTime:number=0;
 
   private baseTimestamp:number;
 
   private frameStates:Map<number,any>=new Map();
+
+  private videoDecoderConfig:any;
 
   static getModifiersForEvent(event: any) {
     return (
@@ -287,7 +289,7 @@ export default class Runner {
       );
     },
     500,
-    { isImmediate: false }
+    { isImmediate: true }
   );
 
   close = once((...args: any[]) => {
@@ -362,39 +364,37 @@ export default class Runner {
 
   onConfigVideoDecoder(msg:any) {
     console.info('onConfigVideoDecoder', msg)
-    if(!this.videoDecoder){
+    this.videoDecoderConfig = msg.data;
+    this.createOrConfigVideoDecoder()
+  }
+
+  createOrConfigVideoDecoder() {
+    if(!this.videoDecoder||this.videoDecoder.state==='closed'){
       const init = {
         output: this.handleFrame.bind(this),
         error: (e:any) => {
-          console.log(e.message);
+          console.log(e.message, e);
         },
       };
-
-      const config = {
-        codec: msg.data.codec,
-        codedWidth: msg.data.codedWidth,
-        codedHeight: msg.data.codedHeight,
-      };
-
-      this.pendingFrames = [];
-      this.underflow = true;
-      this.baseTime = 0;
-
       // eslint-disable-next-line no-undef
       this.videoDecoder = new VideoDecoder(init);
-      this.videoDecoder.configure(config);
-    }else{
-      const config = {
-        codec: msg.data.codec,
-        codedWidth: msg.data.codedWidth,
-        codedHeight: msg.data.codedHeight,
-      };
-      this.videoDecoder.configure(config);
+      console.info("VideoDecoder created")
     }
+    const config = {
+      codec: this.videoDecoderConfig.codec,
+      codedWidth: this.videoDecoderConfig.codedWidth,
+      codedHeight: this.videoDecoderConfig.codedHeight,
+      optimizeForLatency: true
+    };
+    this.videoDecoder.configure(config);
+    console.info("VideoDecoder configured",config)
   }
 
   onVideoChunk(msg:any) {
     this.frameStates.set(msg.data.timestamp,{received:Date.now()})
+    if(!this.videoDecoder||this.videoDecoder.state==='closed'){
+      this.createOrConfigVideoDecoder()
+    }
     // eslint-disable-next-line no-undef
     const chunk = new EncodedVideoChunk({
       timestamp: msg.data.timestamp,
