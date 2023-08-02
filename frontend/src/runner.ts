@@ -269,27 +269,35 @@ export default class Runner {
     window.removeEventListener('resize', this.resizePage);
   };
 
-  resizePage = debounce(
-    () => {
-      const { width, height } = this.$viewer.getBoundingClientRect();
+  doResizePage(){
+    const { width, height } = this.$viewer.getBoundingClientRect();
+    console.debug('doResizePage: width=%d, height=%d', width, height)
 
+    if(this.$canvas.width!==width||this.$canvas.height!==height){
+      console.debug('resize canvas: width=%d, height=%d', width, height)
       this.$canvas.width = width;
       this.$canvas.height = height;
+    }
 
-      this.wsClient.send(
-        JSON.stringify({
-          command: 'Page.setViewport',
-          params: {
-            width: Math.floor(width),
-            height: Math.floor(height),
-            deviceScaleFactor: 1,
-            mobile: true,
-          } as Protocol.Page.SetDeviceMetricsOverrideRequest,
-        })
-      );
+    this.wsClient.send(
+      JSON.stringify({
+        command: 'Page.setViewport',
+        params: {
+          width: Math.floor(width),
+          height: Math.floor(height),
+          deviceScaleFactor: 1,
+          mobile: true,
+        } as Protocol.Page.SetDeviceMetricsOverrideRequest,
+      })
+    );
+  }
+
+  resizePage = debounce(
+    () => {
+      this.doResizePage()
     },
     500,
-    { isImmediate: true }
+    { isImmediate: false }
   );
 
   close = once((...args: any[]) => {
@@ -315,7 +323,7 @@ export default class Runner {
     // this.$iframe.src = iframeURL;
 
     this.addListeners();
-    this.resizePage();
+    this.doResizePage();
 
     const params: Protocol.Page.StartScreencastRequest = {
       format: 'jpeg',
